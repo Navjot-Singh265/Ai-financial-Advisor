@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html><head>
+
+<title>Financial Advisor Dashboard</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+<div class="header">
+Financial Advisor Dashboard
+</div>
+<div class="container">
+<div class="search">
+<input id="stock" placeholder="Enter stock symbol (AAPL)">
+<button onclick="analyze()">Analyze</button>
+<p id="loading" style="display:none;">Loading stock data...</p>
+</div>
+<div class="metrics">
+<div class="metric-card">
+<div class="metric-title">Stock</div>
+<div id="stockName" class="metric-value">-</div>
+</div>
+<div class="metric-card">
+<div class="metric-title">Average Price</div>
+<div id="avgPrice" class="metric-value">-</div>
+</div>
+<div class="metric-card">
+<div class="metric-title">Latest Price</div>
+<div id="latestPrice" class="metric-value">-</div>
+</div>
+<div class="metric-card">
+<div class="metric-title">Trend</div>
+<div id="trend" class="metric-value">-</div>
+</div>
+<div class="metric-card">
+<div class="metric-title">Change</div>
+<div id="priceChange" class="metric-value">-</div>
+</div>
+</div>
+<div class="advice-box">
+<div class="advice-title">AI Financial Insight</div>
+<div id="aiAdvice"></div>
+
+</div>
+<canvas id="chart" height="120"></canvas>
+</div>
+<script>
+let chart;
+async function analyze(){
+let stock=document.getElementById("stock").value;
+document.getElementById("loading").style.display="block";
+let response=await fetch("/analyze",{
+method:"POST",
+headers:{"Content-Type":"application/json"},
+body:JSON.stringify({stock:stock})
+});
+
+let data=await response.json();
+document.getElementById("loading").style.display="none";
+if(data.error){
+alert(data.error);
+return;
+}
+document.getElementById("stockName").innerText=data.stock;
+document.getElementById("avgPrice").innerText="$"+data.avg;
+document.getElementById("latestPrice").innerText="$"+data.latest;
+let changeElement=document.getElementById("priceChange");
+
+if(data.change>=0){
+changeElement.innerText="+$"+data.change;
+changeElement.style.color="green";
+}else{
+changeElement.innerText="-$"+Math.abs(data.change);
+changeElement.style.color="red";
+}
+let trendElement=document.getElementById("trend");
+trendElement.innerText=data.trend;
+if(data.trend.includes("Up")){
+trendElement.style.color="green";
+}else{
+trendElement.style.color="red";
+}
+
+document.getElementById("aiAdvice").innerHTML =
+data.advice.replace(/\n/g,"<br>");
+let ctx=document.getElementById("chart").getContext("2d");
+if(chart){
+chart.destroy();
+}
+chart=new Chart(ctx,{
+type:"line",
+data:{
+labels:data.dates,
+datasets:[{
+label:"Stock Price",
+data:data.chart,
+borderColor:"#2563eb",
+backgroundColor:"rgba(37,99,235,0.2)",
+borderWidth:2,
+pointRadius:0,
+fill:true,
+tension:0.4
+}]
+}
+});
+
+}
+document.getElementById("stock").addEventListener("keypress",function(e){
+if(e.key==="Enter"){
+analyze();
+}
+});
+</script>
+</body>
+</html>
