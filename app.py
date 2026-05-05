@@ -1,32 +1,347 @@
 from flask import Flask, render_template, request, jsonify
 import yfinance as yf
+import numpy as np
+import json
+import os
+import urllib.request
+import urllib.error
+
 app = Flask(__name__)
-def ai_advisor(stock, avg_price, latest_price):
-    if latest_price > avg_price:
-        advice = f"""
-The stock {stock} is currently trading ABOVE its yearly average.
 
-This suggests positive momentum in the market.
+# ─────────────────────────────────────────────
+# GROQ CONFIG  (free at console.groq.com)
+# Set env var:  export GROQ_API_KEY=gsk_...
+# ─────────────────────────────────────────────
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL   = "llama3-70b-8192"   # free & fast
 
-Risk Level: Medium
 
-Suggestion:
-Consider HOLDING the stock or buying on dips if you are a long-term investor.
-"""
-    else:
-        advice = f"""
-The stock {stock} is currently trading BELOW its yearly average.
+def groq_chat(system_prompt, user_prompt, max_tokens=1024):
+    """Call Groq API (OpenAI-compatible). Falls back to rule-based if no key."""
+    if not GROQ_API_KEY:
+        return None   # signal to use fallback
 
-This may indicate bearish sentiment.
+    payload = json.dumps({
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt}
+        ],
+        "max_tokens": max_tokens,
+        "temperature": 0.3
+    }).encode("utf-8")
 
-Risk Level: Medium to High
+    req = urllib.request.Request(
+        GROQ_URL,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + GROQ_API_KEY
+        },
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print("Groq error:", e)
+        return None
 
-Suggestion:
-Be cautious and wait for stronger signals before investing.
-"""
 
-    return advice
+# ─────────────────────────────────────────────
+# TECHNICAL INDICATORS
+# ─────────────────────────────────────────────
 
+def compute_rsi(prices, period=14):
+    delta = np.diff(prices)
+    gain  = np.where(delta > 0, delta, 0)
+    loss  = np.where(delta < 0, -delta, 0)
+    avg_gain = np.mean(gain[:period])
+    avg_loss = np.mean(loss[:period])
+    rs_vals  = []
+    for i in range(period, len(delta)):
+        avg_gain = (avg_gain * (period - 1) + gain[i]) / period
+        avg_loss = (avg_loss * (period - 1) + loss[i]) / period
+        rs = avg_gain / avg_loss if avg_loss != 0 else 100
+        rs_vals.append(100 - (100 / (1 + rs)))
+    return float(rs_vals[-1]) if rs_vals else 50.0
+
+
+def compute_macd(prices):
+    prices = np.array(prices)
+    def ema(data, span):
+        k = 2 / (span + 1)
+        out = [data[0]]
+        for p in data[1:]:
+            out.append(p * k + out[-1] * (1 - k))
+        return np.array(out)
+    ema12 = ema(prices, 12)
+    ema26 = ema(prices, 26)
+    macd_line = ema12 - ema26
+    signal    = ema(macd_line, 9)
+    histogram = macd_line - signal
+    return {
+        "macd":      round(float(macd_line[-1]), 4),
+        "signal":    round(float(signal[-1]),    4),
+        "histogram": round(float(histogram[-1]), 4),
+        "crossover": "bullish" if macd_line[-1] > signal[-1] else "bearish"
+    }
+
+
+def compute_bollinger(prices, period=20):
+    arr = np.array(prices[-period:])
+    mid = float(np.mean(arr))
+    std = float(np.std(arr))
+    upper = mid + 2 * std
+    lower = mid - 2 * std
+    pct_b = (float(arr[-1]) - lower) / (upper - lower) if (upper - lower) else 0.5
+    return {"upper": round(upper, 2), "middle": round(mid, 2),
+            "lower": round(lower, 2), "pct_b": round(pct_b * 100, 1)}
+
+
+def compute_atr(df, period=14):
+    try:
+        high  = df["High"].squeeze()
+        low   = df["Low"].squeeze()
+        close = df["Close"].squeeze()
+        prev  = close.shift(1)
+        tr    = np.maximum(high - low, np.maximum(abs(high - prev), abs(low - prev)))
+        return round(float(tr.rolling(period).mean().iloc[-1]), 2)
+    except Exception:
+        return 0.0
+
+
+# ─────────────────────────────────────────────
+# RULE-BASED FALLBACK ANALYSIS
+# (used when no API key is set)
+# ─────────────────────────────────────────────
+
+def rule_based_analysis(stock, metrics, fundamentals):
+    rsi  = metrics["rsi"]
+    macd = metrics["macd"]
+    boll = metrics["bollinger"]
+    chg  = metrics["change_pct"]
+    dist = metrics["dist_from_high"]
+
+    # Score system
+    score = 0
+    if rsi < 30:  score += 2
+    elif rsi < 45: score += 1
+    elif rsi > 70: score -= 2
+    elif rsi > 60: score -= 1
+
+    if macd["crossover"] == "bullish": score += 2
+    else: score -= 1
+
+    if boll["pct_b"] < 20:  score += 1
+    elif boll["pct_b"] > 80: score -= 1
+
+    if chg > 5:  score += 1
+    elif chg < -10: score -= 1
+
+    if score >= 4:   signal, conf, risk = "STRONG BUY",  "HIGH",   "MEDIUM"
+    elif score >= 2: signal, conf, risk = "BUY",         "MEDIUM", "MEDIUM"
+    elif score >= 0: signal, conf, risk = "HOLD",        "MEDIUM", "MEDIUM"
+    elif score >= -2:signal, conf, risk = "SELL",        "MEDIUM", "HIGH"
+    else:            signal, conf, risk = "STRONG SELL", "HIGH",   "VERY HIGH"
+
+    rsi_note = ("oversold — potential bounce" if rsi < 30
+                else "overbought — caution" if rsi > 70
+                else "neutral momentum")
+
+    macd_note = ("bullish crossover — upward momentum" if macd["crossover"] == "bullish"
+                 else "bearish crossover — downward momentum")
+
+    pe  = fundamentals.get("pe_fwd", "N/A")
+    beta = fundamentals.get("beta", "N/A")
+
+    bear = round(metrics["latest"] * 0.85, 2)
+    base = round(metrics["latest"] * 1.08, 2)
+    bull = round(metrics["latest"] * 1.20, 2)
+
+    if fundamentals.get("analyst_target") and fundamentals["analyst_target"] != "N/A":
+        base = fundamentals["analyst_target"]
+        bull = round(float(base) * 1.10, 2)
+        bear = round(metrics["latest"] * 0.88, 2)
+
+    return {
+        "summary": (
+            f"{stock} is showing {macd_note}. RSI at {rsi:.1f} indicates {rsi_note}. "
+            f"The stock is {abs(dist):.1f}% below its 52-week high, "
+            f"suggesting {'limited' if dist < 10 else 'significant'} room to recover."
+        ),
+        "signal":    signal,
+        "confidence": conf,
+        "risk_level": risk,
+        "key_insights": [
+            f"RSI {rsi:.1f} — {rsi_note}",
+            f"MACD {macd_note}",
+            f"Bollinger %B at {boll['pct_b']}% — {'near upper band' if boll['pct_b'] > 70 else 'near lower band' if boll['pct_b'] < 30 else 'mid-range'}",
+            f"Price {chg:+.1f}% vs 52-week average"
+        ],
+        "technical_analysis": (
+            f"MACD shows a {macd['crossover']} crossover with histogram at {macd['histogram']:.4f}. "
+            f"RSI at {rsi:.1f} and Bollinger %B at {boll['pct_b']}% "
+            f"{'suggest buying pressure' if score > 0 else 'suggest selling pressure'}."
+        ),
+        "fundamental_analysis": (
+            f"Forward P/E of {pe} and beta of {beta}. "
+            f"Analyst consensus: {fundamentals.get('analyst_rec','N/A')} "
+            f"with target ${fundamentals.get('analyst_target','N/A')}."
+        ),
+        "catalysts": [
+            "Upcoming earnings release" if fundamentals.get("earnings_date","N/A") != "N/A" else "Sector rotation opportunities",
+            "Potential MACD crossover signal",
+            "Analyst price target upside"
+        ],
+        "risks": [
+            "High RSI overbought risk" if rsi > 65 else "Low volume momentum risk",
+            f"Beta {beta} — {'high' if str(beta) != 'N/A' and float(str(beta)) > 1.5 else 'moderate'} market sensitivity",
+            "Macro / interest rate headwinds"
+        ],
+        "price_targets": {"bear": bear, "base": base, "bull": bull},
+        "time_horizon": "MEDIUM-TERM",
+        "sector_outlook": f"Monitor sector trends and broader market conditions for {stock}."
+    }
+
+
+# ─────────────────────────────────────────────
+# GROQ-POWERED ANALYSIS
+# ─────────────────────────────────────────────
+
+def get_ai_analysis(stock, metrics, fundamentals):
+    system = "You are a senior CFA charterholder. Respond ONLY with valid JSON, no markdown, no preamble."
+    prompt = f"""Analyze {stock}:
+Price ${metrics['latest']:.2f} | 52W Avg ${metrics['avg']:.2f} | vs Avg {metrics['change_pct']:+.1f}%
+RSI {metrics['rsi']:.1f} | MACD {metrics['macd']['macd']:.4f} ({metrics['macd']['crossover']}) | Bollinger %B {metrics['bollinger']['pct_b']}%
+52W High ${metrics['high_52w']:.2f} (-{metrics['dist_from_high']:.1f}%) | SMA20 ${metrics['sma20']:.2f} | SMA50 ${metrics['sma50']:.2f} | ATR ${metrics['atr']}
+Sector {fundamentals['sector']} | Cap {fundamentals['market_cap']} | Fwd P/E {fundamentals['pe_fwd']} | Beta {fundamentals['beta']}
+Earnings {fundamentals['earnings_date']} | Analyst {fundamentals['analyst_rec']} Target ${fundamentals['analyst_target']}
+
+Return JSON:
+{{"summary":"3 sentences","signal":"STRONG BUY|BUY|HOLD|SELL|STRONG SELL","confidence":"HIGH|MEDIUM|LOW","risk_level":"LOW|MEDIUM|HIGH|VERY HIGH","key_insights":["i1","i2","i3","i4"],"technical_analysis":"2 sentences","fundamental_analysis":"2 sentences","catalysts":["c1","c2","c3"],"risks":["r1","r2","r3"],"price_targets":{{"bear":0,"base":0,"bull":0}},"time_horizon":"SHORT-TERM|MEDIUM-TERM|LONG-TERM","sector_outlook":"1 sentence"}}"""
+
+    raw = groq_chat(system, prompt, max_tokens=1024)
+    if not raw:
+        return rule_based_analysis(stock, metrics, fundamentals)
+
+    # strip any accidental markdown fences
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        return rule_based_analysis(stock, metrics, fundamentals)
+
+
+def get_news_sentiment(stock, news_items):
+    empty = {"score": 0, "label": "NEUTRAL", "summary": "No recent news found.",
+             "headlines": [], "key_themes": []}
+    if not news_items:
+        return empty
+
+    headlines_text = "\n".join([f"- {n['title']}" for n in news_items[:10]])
+
+    system = "You are a financial sentiment analyst. Respond ONLY with valid JSON, no markdown."
+    prompt = f"""Analyze sentiment of these {stock} headlines:
+{headlines_text}
+
+Return JSON:
+{{"score":<-100 to 100>,"label":"VERY BULLISH|BULLISH|NEUTRAL|BEARISH|VERY BEARISH","summary":"2 sentences","key_themes":["t1","t2","t3"],"notable_headline":"paraphrase most impactful headline"}}"""
+
+    raw = groq_chat(system, prompt, max_tokens=400)
+    if not raw:
+        # simple rule-based sentiment
+        positive_words = ["surge", "beat", "record", "growth", "buy", "upgrade", "profit", "gain", "strong", "bullish"]
+        negative_words = ["fall", "miss", "loss", "cut", "downgrade", "sell", "decline", "weak", "bearish", "drop"]
+        all_text = " ".join([n["title"].lower() for n in news_items])
+        pos = sum(1 for w in positive_words if w in all_text)
+        neg = sum(1 for w in negative_words if w in all_text)
+        score = min(100, max(-100, (pos - neg) * 15))
+        label = "BULLISH" if score > 20 else ("BEARISH" if score < -20 else "NEUTRAL")
+        result = {"score": score, "label": label,
+                  "summary": f"News sentiment appears {label.lower()} based on recent headlines.",
+                  "key_themes": ["earnings", "market trends", "analyst coverage"],
+                  "notable_headline": news_items[0]["title"] if news_items else ""}
+        result["headlines"] = [{"title": n["title"], "publisher": n.get("publisher",""), "link": n.get("link","")} for n in news_items[:6]]
+        return result
+
+    raw = raw.replace("```json","").replace("```","").strip()
+    try:
+        result = json.loads(raw)
+        result["headlines"] = [{"title": n["title"], "publisher": n.get("publisher",""), "link": n.get("link","")} for n in news_items[:6]]
+        return result
+    except Exception:
+        empty["headlines"] = [{"title": n["title"], "publisher": n.get("publisher",""), "link": n.get("link","")} for n in news_items[:6]]
+        return empty
+
+
+# ─────────────────────────────────────────────
+# FUNDAMENTALS
+# ─────────────────────────────────────────────
+
+def get_fundamentals(ticker_obj):
+    try:
+        info = ticker_obj.info
+        cal  = ticker_obj.calendar
+        earnings_date = "N/A"
+        if cal is not None and not cal.empty:
+            if "Earnings Date" in cal.index:
+                ed  = cal.loc["Earnings Date"]
+                val = list(ed)[0] if hasattr(ed, '__iter__') else ed
+                earnings_date = str(val)[:10]
+
+        def fmt_cap(v):
+            if v is None: return "N/A"
+            if v >= 1e12: return f"${v/1e12:.2f}T"
+            if v >= 1e9:  return f"${v/1e9:.2f}B"
+            if v >= 1e6:  return f"${v/1e6:.2f}M"
+            return f"${v:,.0f}"
+
+        rec     = info.get("recommendationMean")
+        rec_key = info.get("recommendationKey","").upper().replace("-"," ")
+        rec_map = {1:"STRONG BUY",2:"BUY",3:"HOLD",4:"SELL",5:"STRONG SELL"}
+        rec_label = rec_key if rec_key else (rec_map.get(round(rec),"N/A") if rec else "N/A")
+
+        pe_fwd  = info.get("forwardPE")
+        pe_tr   = info.get("trailingPE")
+        peg     = info.get("pegRatio")
+        beta    = info.get("beta")
+        div     = info.get("dividendYield")
+        short   = info.get("shortRatio")
+        at      = info.get("targetMeanPrice")
+        al      = info.get("targetLowPrice")
+        ah      = info.get("targetHighPrice")
+
+        return {
+            "earnings_date":  earnings_date,
+            "eps_fwd":        round(info.get("forwardEps") or 0, 2) or "N/A",
+            "pe_fwd":         round(pe_fwd, 1) if pe_fwd else "N/A",
+            "pe_trail":       round(pe_tr,  1) if pe_tr  else "N/A",
+            "peg":            round(peg,    2) if peg    else "N/A",
+            "div_yield":      f"{div*100:.2f}%" if div   else "N/A",
+            "market_cap":     fmt_cap(info.get("marketCap")),
+            "beta":           round(beta,  2) if beta   else "N/A",
+            "short_ratio":    round(short, 1) if short  else "N/A",
+            "analyst_target": round(at, 2)    if at     else "N/A",
+            "analyst_low":    round(al, 2)    if al     else "N/A",
+            "analyst_high":   round(ah, 2)    if ah     else "N/A",
+            "analyst_rec":    rec_label,
+            "name":           info.get("longName",""),
+            "sector":         info.get("sector","N/A"),
+            "industry":       info.get("industry","N/A"),
+        }
+    except Exception:
+        return {"earnings_date":"N/A","eps_fwd":"N/A","pe_fwd":"N/A","pe_trail":"N/A",
+                "peg":"N/A","div_yield":"N/A","market_cap":"N/A","beta":"N/A",
+                "short_ratio":"N/A","analyst_target":"N/A","analyst_low":"N/A",
+                "analyst_high":"N/A","analyst_rec":"N/A","name":"","sector":"N/A","industry":"N/A"}
+
+
+# ─────────────────────────────────────────────
+# ROUTES
+# ─────────────────────────────────────────────
 
 @app.route("/")
 def home():
@@ -35,42 +350,235 @@ def home():
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
-
     try:
-
-        data = request.get_json()
-        stock = data["stock"].upper()
-
-        df = yf.download(stock, period="1y", progress=False)
-
+        data  = request.get_json()
+        stock = data["stock"].upper().strip()
+        ticker = yf.Ticker(stock)
+        df = yf.download(stock, period="1y", progress=False, auto_adjust=True)
         if df.empty:
-            return jsonify({"error": "Invalid stock symbol"})
+            return jsonify({"error": f"Invalid symbol: {stock}"})
 
-        close = df["Close"].squeeze()
+        close  = df["Close"].squeeze().dropna()
+        volume = df["Volume"].squeeze().dropna()
+        prices = close.tolist()
 
-        avg_price = float(close.mean())
+        avg_price    = float(close.mean())
         latest_price = float(close.iloc[-1])
-
-        trend = "Uptrend 📈" if latest_price > avg_price else "Downtrend 📉"
-
+        high_52w     = float(close.max())
+        low_52w      = float(close.min())
         price_change = latest_price - avg_price
+        change_pct   = (price_change / avg_price) * 100
+        dist_from_high = ((high_52w - latest_price) / high_52w) * 100
 
-        advice = ai_advisor(stock, avg_price, latest_price)
+        sma20  = float(close.rolling(20).mean().iloc[-1])
+        sma50  = float(close.rolling(50).mean().iloc[-1])
+        sma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else None
+
+        rsi    = compute_rsi(prices)
+        macd   = compute_macd(prices)
+        boll   = compute_bollinger(prices)
+        atr    = compute_atr(df)
+
+        avg_vol    = float(volume.mean())
+        recent_vol = float(volume.iloc[-5:].mean())
+        vol_trend  = "High" if recent_vol > avg_vol * 1.2 else ("Low" if recent_vol < avg_vol * 0.8 else "Normal")
+
+        metrics = {
+            "latest": latest_price, "avg": avg_price,
+            "change": price_change, "change_pct": change_pct,
+            "high_52w": high_52w, "low_52w": low_52w,
+            "dist_from_high": dist_from_high,
+            "rsi": rsi, "macd": macd, "bollinger": boll, "atr": atr,
+            "sma20": sma20, "sma50": sma50, "volume_trend": vol_trend
+        }
+
+        fundamentals = get_fundamentals(ticker)
+
+        # News
+        try:
+            raw_news = ticker.news or []
+            news_items = []
+            for n in raw_news[:12]:
+                title = n.get("title","")
+                if not title:
+                    c = n.get("content",{})
+                    title = c.get("title","") if isinstance(c, dict) else ""
+                publisher = n.get("publisher","")
+                if not publisher:
+                    c = n.get("content",{})
+                    if isinstance(c, dict):
+                        p = c.get("provider",{})
+                        publisher = p.get("displayName","") if isinstance(p, dict) else ""
+                link = n.get("link","")
+                if not link:
+                    c = n.get("content",{})
+                    if isinstance(c, dict):
+                        cu = c.get("canonicalUrl",{})
+                        link = cu.get("url","") if isinstance(cu, dict) else str(cu)
+                if title:
+                    news_items.append({"title": title, "publisher": publisher, "link": link})
+            sentiment = get_news_sentiment(stock, news_items)
+        except Exception:
+            sentiment = {"score":0,"label":"NEUTRAL","summary":"News unavailable.","headlines":[],"key_themes":[]}
+
+        ai = get_ai_analysis(stock, metrics, fundamentals)
+
+        def safe_list(series):
+            return [round(float(v), 2) if v == v else None for v in series.tolist()]
+
+        chart = {
+            "prices":          [round(p, 2) for p in prices[-90:]],
+            "sma20":           safe_list(close.rolling(20).mean().iloc[-90:]),
+            "sma50":           safe_list(close.rolling(50).mean().iloc[-90:]),
+            "dates":           df.index.strftime("%b %d").tolist()[-90:],
+            "bollinger_upper": safe_list(close.rolling(20).mean().add(close.rolling(20).std() * 2).iloc[-90:]),
+            "bollinger_lower": safe_list(close.rolling(20).mean().sub(close.rolling(20).std() * 2).iloc[-90:]),
+            "volumes":         [int(v) for v in volume.iloc[-90:].tolist()],
+        }
 
         return jsonify({
             "stock": stock,
-            "avg": round(avg_price,2),
-            "latest": round(latest_price,2),
-            "trend": trend,
-            "change": round(price_change,2),
-            "advice": advice,
-            "chart": close.tolist(),
-            "dates": df.index.strftime("%Y-%m-%d").tolist()
+            "name":  fundamentals.get("name", stock),
+            "ai_powered": bool(GROQ_API_KEY),
+            "metrics": {
+                "avg": round(avg_price, 2), "latest": round(latest_price, 2),
+                "change": round(price_change, 2), "change_pct": round(change_pct, 2),
+                "high_52w": round(high_52w, 2), "low_52w": round(low_52w, 2),
+                "dist_from_high": round(dist_from_high, 1),
+                "rsi": round(rsi, 1), "macd": macd, "bollinger": boll, "atr": atr,
+                "sma20": round(sma20, 2), "sma50": round(sma50, 2),
+                "sma200": round(sma200, 2) if sma200 else None,
+                "volume_trend": vol_trend,
+                "trend": "Uptrend" if latest_price > avg_price else "Downtrend"
+            },
+            "fundamentals": fundamentals,
+            "sentiment":    sentiment,
+            "ai":           ai,
+            "chart":        chart
         })
 
     except Exception as e:
         return jsonify({"error": str(e)})
 
 
+@app.route("/chat", methods=["POST"])
+def chat():
+    try:
+        body     = request.get_json()
+        messages = body.get("messages", [])
+        ctx      = body.get("context", {})
+
+        system = (
+            f"You are an expert financial analyst AI in QuantView dashboard. "
+            f"Stock: {ctx.get('stock','N/A')} | Price: ${ctx.get('price','N/A')} | "
+            f"Signal: {ctx.get('signal','N/A')} | RSI: {ctx.get('rsi','N/A')} | "
+            f"Sector: {ctx.get('sector','N/A')} | Earnings: {ctx.get('earnings_date','N/A')}. "
+            f"Be direct and data-driven. Keep answers to 3-5 sentences."
+        )
+
+        # Build conversation for Groq
+        last_user = messages[-1]["content"] if messages else ""
+        reply = groq_chat(system, last_user, max_tokens=600)
+
+        if not reply:
+            # Rule-based chat fallback
+            q = last_user.lower()
+            stock = ctx.get("stock","the stock")
+            rsi   = ctx.get("rsi", 50)
+            sig   = ctx.get("signal","HOLD")
+            if "entry" in q or "buy" in q:
+                reply = f"Based on the current signal of {sig}, RSI at {rsi}, consider entering {stock} on a pullback to support. Always use a stop-loss."
+            elif "target" in q or "price" in q:
+                reply = f"Analyst consensus and technical targets suggest monitoring the base case. Signal is {sig} with RSI at {rsi}."
+            elif "risk" in q:
+                reply = f"Key risks include earnings volatility, macro headwinds, and technical resistance. RSI at {rsi} — {'overbought caution' if float(str(rsi)) > 65 else 'monitor momentum'}."
+            elif "technical" in q:
+                reply = f"RSI at {rsi} ({'overbought' if float(str(rsi)) > 70 else 'oversold' if float(str(rsi)) < 30 else 'neutral'}). Current signal: {sig}. Check MACD and Bollinger Bands in the Analysis tab for more detail."
+            else:
+                reply = f"Current signal for {stock} is {sig} with RSI at {rsi}. Check the Analysis and Fundamentals tabs for a complete picture. Add your GROQ_API_KEY for full AI chat."
+
+        return jsonify({"reply": reply})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+@app.route("/portfolio/quote", methods=["POST"])
+def portfolio_quote():
+    try:
+        symbols = request.get_json().get("symbols", [])
+        result  = {}
+        for sym in symbols:
+            try:
+                df = yf.download(sym, period="2d", progress=False, auto_adjust=True)
+                if not df.empty:
+                    c    = df["Close"].squeeze()
+                    cur  = float(c.iloc[-1])
+                    prev = float(c.iloc[-2]) if len(c) > 1 else cur
+                    result[sym] = {
+                        "price":      round(cur, 2),
+                        "change":     round(cur - prev, 2),
+                        "change_pct": round((cur - prev) / prev * 100, 2)
+                    }
+            except Exception:
+                result[sym] = {"price": 0, "change": 0, "change_pct": 0}
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+@app.route("/portfolio/analyze", methods=["POST"])
+def portfolio_analyze():
+    try:
+        body        = request.get_json()
+        holdings    = body.get("holdings", [])
+        total_value = body.get("total_value", 0)
+        total_pnl   = body.get("total_pnl", 0)
+
+        lines = "\n".join([
+            f"- {h['symbol']}: {h['shares']} shares @ ${h['avg_cost']} | "
+            f"Now ${h['current_price']} | P&L ${h['pnl']:+.2f} ({h['pnl_pct']:+.1f}%) | Weight {h['weight']:.1f}%"
+            for h in holdings
+        ])
+
+        system = "You are a portfolio manager. Respond ONLY with valid JSON, no markdown."
+        prompt = (
+            f"Analyze portfolio. Value: ${total_value:,.2f} | P&L: ${total_pnl:+,.2f}\n{lines}\n"
+            f'Return JSON: {{"assessment":"2-3 sentences","diversification":"POOR|FAIR|GOOD|EXCELLENT",'
+            f'"risk_score":<1-10>,"top_concern":"biggest risk","recommendations":["r1","r2","r3"],'
+            f'"rebalance_suggestions":["s1","s2"]}}'
+        )
+
+        raw = groq_chat(system, prompt, max_tokens=500)
+
+        if not raw:
+            # Rule-based portfolio assessment
+            n = len(holdings)
+            diversification = "POOR" if n < 3 else ("FAIR" if n < 5 else ("GOOD" if n < 8 else "EXCELLENT"))
+            pnl_pct = (total_pnl / (total_value - total_pnl) * 100) if (total_value - total_pnl) else 0
+            return jsonify({
+                "assessment": f"Portfolio of {n} positions with total P&L of ${total_pnl:+,.2f} ({pnl_pct:+.1f}%). {'Diversification is limited — consider adding more positions.' if n < 4 else 'Portfolio has reasonable diversification.'}",
+                "diversification": diversification,
+                "risk_score": max(1, min(10, 10 - n)),
+                "top_concern": "Concentration risk" if n < 4 else "Monitor individual position sizing",
+                "recommendations": [
+                    "Review stop-loss levels for all positions",
+                    "Consider trimming positions with >20% gains",
+                    "Maintain cash reserve for new opportunities"
+                ],
+                "rebalance_suggestions": [
+                    "Ensure no single position exceeds 25% of portfolio",
+                    "Add sector diversification if over-concentrated"
+                ]
+            })
+
+        raw = raw.replace("```json","").replace("```","").strip()
+        return jsonify(json.loads(raw))
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
 if __name__ == "__main__":
+    mode = "Groq AI (llama3-70b)" if GROQ_API_KEY else "Rule-Based (no API key)"
+    print(f"QuantView starting — Analysis mode: {mode}")
+    print("Get free Groq API key at: https://console.groq.com")
     app.run(debug=True)
