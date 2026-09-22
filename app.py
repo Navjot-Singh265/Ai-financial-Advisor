@@ -8,19 +8,15 @@ import urllib.error
 
 app = Flask(__name__)
 
-# ─────────────────────────────────────────────
-# GROQ CONFIG  (free at console.groq.com)
-# Set env var:  export GROQ_API_KEY=gsk_...
-# ─────────────────────────────────────────────
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL   = "llama3-70b-8192"   # free & fast
+GROQ_MODEL   = "llama3-70b-8192" 
 
 
 def groq_chat(system_prompt, user_prompt, max_tokens=1024):
     """Call Groq API (OpenAI-compatible). Falls back to rule-based if no key."""
     if not GROQ_API_KEY:
-        return None   # signal to use fallback
+        return None
 
     payload = json.dumps({
         "model": GROQ_MODEL,
@@ -282,61 +278,122 @@ Return JSON:
 # ─────────────────────────────────────────────
 
 def get_fundamentals(ticker_obj):
+    empty = {"earnings_date":"N/A","eps_fwd":"N/A","pe_fwd":"N/A","pe_trail":"N/A",
+             "peg":"N/A","div_yield":"N/A","market_cap":"N/A","beta":"N/A",
+             "short_ratio":"N/A","analyst_target":"N/A","analyst_low":"N/A",
+             "analyst_high":"N/A","analyst_rec":"N/A","name":"","sector":"N/A","industry":"N/A"}
     try:
-        info = ticker_obj.info
-        cal  = ticker_obj.calendar
-        earnings_date = "N/A"
-        if cal is not None and not cal.empty:
-            if "Earnings Date" in cal.index:
-                ed  = cal.loc["Earnings Date"]
-                val = list(ed)[0] if hasattr(ed, '__iter__') else ed
-                earnings_date = str(val)[:10]
-
         def fmt_cap(v):
-            if v is None: return "N/A"
+            if not v: return "N/A"
             if v >= 1e12: return f"${v/1e12:.2f}T"
             if v >= 1e9:  return f"${v/1e9:.2f}B"
             if v >= 1e6:  return f"${v/1e6:.2f}M"
             return f"${v:,.0f}"
 
-        rec     = info.get("recommendationMean")
-        rec_key = info.get("recommendationKey","").upper().replace("-"," ")
-        rec_map = {1:"STRONG BUY",2:"BUY",3:"HOLD",4:"SELL",5:"STRONG SELL"}
-        rec_label = rec_key if rec_key else (rec_map.get(round(rec),"N/A") if rec else "N/A")
+        # ── Try fast_info first (most reliable in yfinance 0.2.x+) ──
+        fi = None
+        try:
+            fi = ticker_obj.fast_info
+        except Exception:
+            pass
 
-        pe_fwd  = info.get("forwardPE")
-        pe_tr   = info.get("trailingPE")
-        peg     = info.get("pegRatio")
-        beta    = info.get("beta")
-        div     = info.get("dividendYield")
-        short   = info.get("shortRatio")
-        at      = info.get("targetMeanPrice")
-        al      = info.get("targetLowPrice")
-        ah      = info.get("targetHighPrice")
+        # ── Then try full info dict ──
+        info = {}
+        try:
+            info = ticker_obj.info or {}
+            # yfinance sometimes returns {trailingPegRatio: null} junk — check it's real
+            if not info.get("symbol") and not info.get("shortName") and not info.get("regularMarketPrice"):
+                info = {}
+        except Exception:
+            pass
+
+        # ── Merge: prefer info, fall back to fast_info ──
+        def g(key, fi_key=None, default=None):
+            v = info.get(key)
+            if v is None and fi and fi_key:
+                try:
+                    v = getattr(fi, fi_key, None)
+                except Exception:
+                    pass
+            return v if v is not None else default
+
+        # Market cap
+        market_cap = g("marketCap", "market_cap")
+        if not market_cap and fi:
+            try: market_cap = fi.market_cap
+            except Exception: pass
+
+        # Name / sector
+        name     = g("longName") or g("shortName") or ""
+        sector   = g("sector", default="N/A")
+        industry = g("industry", default="N/A")
+
+        # Valuation
+        pe_fwd  = g("forwardPE")
+        pe_tr   = g("trailingPE", "pe_ratio")
+        peg     = g("pegRatio")
+        beta    = g("beta", "beta3_year")
+        div     = g("dividendYield")
+        short   = g("shortRatio")
+        eps_fwd = g("forwardEps")
+
+        # Analyst targets
+        at = g("targetMeanPrice")
+        al = g("targetLowPrice")
+        ah = g("targetHighPrice")
+
+        # Recommendation
+        rec     = g("recommendationMean")
+        rec_key = (g("recommendationKey") or "").upper().replace("-", " ")
+        rec_map = {1: "STRONG BUY", 2: "BUY", 3: "HOLD", 4: "SELL", 5: "STRONG SELL"}
+        if rec_key:
+            rec_label = rec_key
+        elif rec:
+            try: rec_label = rec_map.get(round(float(rec)), "N/A")
+            except Exception: rec_label = "N/A"
+        else:
+            rec_label = "N/A"
+
+        # Earnings date — try calendar, then earningsTimestamp
+        earnings_date = "N/A"
+        try:
+            cal = ticker_obj.calendar
+            if cal is not None and not cal.empty and "Earnings Date" in cal.index:
+                ed  = cal.loc["Earnings Date"]
+                val = list(ed)[0] if hasattr(ed, "__iter__") else ed
+                earnings_date = str(val)[:10]
+        except Exception:
+            pass
+        if earnings_date == "N/A":
+            try:
+                et = info.get("earningsTimestamp") or info.get("earningsTimestampStart")
+                if et:
+                    import datetime
+                    earnings_date = datetime.datetime.utcfromtimestamp(et).strftime("%Y-%m-%d")
+            except Exception:
+                pass
 
         return {
             "earnings_date":  earnings_date,
-            "eps_fwd":        round(info.get("forwardEps") or 0, 2) or "N/A",
-            "pe_fwd":         round(pe_fwd, 1) if pe_fwd else "N/A",
-            "pe_trail":       round(pe_tr,  1) if pe_tr  else "N/A",
-            "peg":            round(peg,    2) if peg    else "N/A",
-            "div_yield":      f"{div*100:.2f}%" if div   else "N/A",
-            "market_cap":     fmt_cap(info.get("marketCap")),
-            "beta":           round(beta,  2) if beta   else "N/A",
-            "short_ratio":    round(short, 1) if short  else "N/A",
-            "analyst_target": round(at, 2)    if at     else "N/A",
-            "analyst_low":    round(al, 2)    if al     else "N/A",
-            "analyst_high":   round(ah, 2)    if ah     else "N/A",
+            "eps_fwd":        round(float(eps_fwd), 2) if eps_fwd else "N/A",
+            "pe_fwd":         round(float(pe_fwd),  1) if pe_fwd  else "N/A",
+            "pe_trail":       round(float(pe_tr),   1) if pe_tr   else "N/A",
+            "peg":            round(float(peg),     2) if peg     else "N/A",
+            "div_yield":      f"{float(div)*100:.2f}%" if div     else "N/A",
+            "market_cap":     fmt_cap(market_cap),
+            "beta":           round(float(beta),    2) if beta    else "N/A",
+            "short_ratio":    round(float(short),   1) if short   else "N/A",
+            "analyst_target": round(float(at), 2)      if at      else "N/A",
+            "analyst_low":    round(float(al), 2)      if al      else "N/A",
+            "analyst_high":   round(float(ah), 2)      if ah      else "N/A",
             "analyst_rec":    rec_label,
-            "name":           info.get("longName",""),
-            "sector":         info.get("sector","N/A"),
-            "industry":       info.get("industry","N/A"),
+            "name":           name,
+            "sector":         sector   or "N/A",
+            "industry":       industry or "N/A",
         }
-    except Exception:
-        return {"earnings_date":"N/A","eps_fwd":"N/A","pe_fwd":"N/A","pe_trail":"N/A",
-                "peg":"N/A","div_yield":"N/A","market_cap":"N/A","beta":"N/A",
-                "short_ratio":"N/A","analyst_target":"N/A","analyst_low":"N/A",
-                "analyst_high":"N/A","analyst_rec":"N/A","name":"","sector":"N/A","industry":"N/A"}
+    except Exception as e:
+        print(f"get_fundamentals error: {e}")
+        return empty
 
 
 # ─────────────────────────────────────────────
@@ -346,6 +403,44 @@ def get_fundamentals(ticker_obj):
 @app.route("/")
 def home():
     return render_template("index.html")
+
+
+@app.route("/search", methods=["GET"])
+def search_stocks():
+    """Search for stock symbols using yfinance + Yahoo Finance search API."""
+    query = request.args.get("q", "").strip()
+    if len(query) < 1:
+        return jsonify([])
+    try:
+        import urllib.parse
+        # Yahoo Finance search endpoint
+        url = "https://query2.finance.yahoo.com/v1/finance/search?q=" + \
+              urllib.parse.quote(query) + \
+              "&quotesCount=8&newsCount=0&listsCount=0&enableFuzzyQuery=false"
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible)"}
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        results = []
+        for q in data.get("quotes", [])[:8]:
+            symbol   = q.get("symbol", "")
+            name     = q.get("longname") or q.get("shortname") or ""
+            q_type   = q.get("quoteType", "")
+            exchange = q.get("exchange", "")
+            # Filter to equities and ETFs on major exchanges
+            if q_type in ("EQUITY", "ETF", "INDEX") and symbol:
+                results.append({
+                    "symbol":   symbol,
+                    "name":     name,
+                    "type":     q_type,
+                    "exchange": exchange
+                })
+        return jsonify(results)
+    except Exception as e:
+        return jsonify([])
 
 
 @app.route("/analyze", methods=["POST"])
@@ -573,6 +668,224 @@ def portfolio_analyze():
 
         raw = raw.replace("```json","").replace("```","").strip()
         return jsonify(json.loads(raw))
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+# ─────────────────────────────────────────────
+# BACKTESTING ENGINE
+# ─────────────────────────────────────────────
+
+def backtest_strategy(prices, dates, strategy="combined"):
+    """
+    Simulate a signal-based trading strategy over historical data.
+    Returns directional accuracy, total return, win rate, Sharpe ratio,
+    max drawdown, and a full trade log.
+
+    Strategies:
+      rsi       — buy <30, sell >70
+      macd      — buy on bullish crossover, sell on bearish
+      combined  — both RSI + MACD must agree (higher precision)
+    """
+    prices = np.array(prices, dtype=float)
+    n = len(prices)
+
+    # ── Pre-compute indicators for every bar ──
+    # RSI series
+    def rsi_series(px, period=14):
+        out = [np.nan] * period
+        delta = np.diff(px)
+        gain = np.where(delta > 0, delta, 0.0)
+        loss = np.where(delta < 0, -delta, 0.0)
+        ag = np.mean(gain[:period])
+        al = np.mean(loss[:period])
+        for i in range(period, len(delta)):
+            ag = (ag * (period - 1) + gain[i]) / period
+            al = (al * (period - 1) + loss[i]) / period
+            rs = ag / al if al != 0 else 100
+            out.append(100 - (100 / (1 + rs)))
+        return out
+
+    def macd_series(px):
+        k12 = 2 / 13; k26 = 2 / 27; k9 = 2 / 10
+        ema12 = [px[0]]; ema26 = [px[0]]
+        for p in px[1:]:
+            ema12.append(p * k12 + ema12[-1] * (1 - k12))
+            ema26.append(p * k26 + ema26[-1] * (1 - k26))
+        macd_line = [a - b for a, b in zip(ema12, ema26)]
+        sig = [macd_line[0]]
+        for m in macd_line[1:]:
+            sig.append(m * k9 + sig[-1] * (1 - k9))
+        return macd_line, sig
+
+    rsi_vals = rsi_series(prices)
+    macd_line, macd_sig = macd_series(prices)
+
+    # ── Signal generation ──
+    position   = 0       # 1 = long, 0 = flat
+    entry_price = 0.0
+    trades     = []      # list of closed trades
+    equity     = [1.0]   # normalised equity curve
+    capital    = 1.0
+
+    for i in range(26, n - 1):          # need enough bars for MACD
+        rsi   = rsi_vals[i]
+        m     = macd_line[i];   s = macd_sig[i]
+        m_prev = macd_line[i-1]; s_prev = macd_sig[i-1]
+        bullish_cross = (m > s) and (m_prev <= s_prev)
+        bearish_cross = (m < s) and (m_prev >= s_prev)
+
+        if strategy == "rsi":
+            buy_sig  = (rsi is not None and rsi < 30)
+            sell_sig = (rsi is not None and rsi > 70)
+        elif strategy == "macd":
+            buy_sig  = bullish_cross
+            sell_sig = bearish_cross
+        else:  # combined — both must agree
+            buy_sig  = bullish_cross and rsi is not None and rsi < 50
+            sell_sig = bearish_cross and rsi is not None and rsi > 50
+
+        next_price = prices[i + 1]
+
+        if buy_sig and position == 0:
+            position    = 1
+            entry_price = prices[i]
+
+        elif sell_sig and position == 1:
+            ret = (next_price - entry_price) / entry_price
+            capital *= (1 + ret)
+            trades.append({
+                "entry_date":  dates[i - 1],
+                "exit_date":   dates[i],
+                "entry_price": round(float(entry_price), 2),
+                "exit_price":  round(float(next_price), 2),
+                "return_pct":  round(float(ret * 100), 2),
+                "win":         bool(ret > 0)
+            })
+            position = 0
+
+        equity.append(round(capital, 4))
+
+    # Close any open position at last bar
+    if position == 1:
+        ret = (prices[-1] - entry_price) / entry_price
+        capital *= (1 + ret)
+        trades.append({
+            "entry_date":  dates[-2],
+            "exit_date":   dates[-1],
+            "entry_price": round(float(entry_price), 2),
+            "exit_price":  round(float(prices[-1]), 2),
+            "return_pct":  round(float(ret * 100), 2),
+            "win":         bool(ret > 0)
+        })
+
+    if not trades:
+        return None
+
+    # ── Metrics ──
+    wins      = [t for t in trades if t["win"]]
+    losses    = [t for t in trades if not t["win"]]
+    win_rate  = len(wins) / len(trades) * 100
+
+    # Directional accuracy: did signal correctly predict next-day direction?
+    correct = 0; total_signals = 0
+    for i in range(26, n - 1):
+        rsi = rsi_vals[i]
+        m   = macd_line[i]; s = macd_sig[i]
+        m_p = macd_line[i-1]; s_p = macd_sig[i-1]
+        bc  = (m > s) and (m_p <= s_p)
+        sc  = (m < s) and (m_p >= s_p)
+        actual_up = prices[i + 1] > prices[i]
+        if strategy == "rsi":
+            if rsi is not None and rsi < 30:
+                total_signals += 1
+                if actual_up: correct += 1
+            elif rsi is not None and rsi > 70:
+                total_signals += 1
+                if not actual_up: correct += 1
+        elif strategy == "macd":
+            if bc:
+                total_signals += 1
+                if actual_up: correct += 1
+            elif sc:
+                total_signals += 1
+                if not actual_up: correct += 1
+        else:
+            if bc and rsi is not None and rsi < 50:
+                total_signals += 1
+                if actual_up: correct += 1
+            elif sc and rsi is not None and rsi > 50:
+                total_signals += 1
+                if not actual_up: correct += 1
+
+    dir_accuracy = round(correct / total_signals * 100, 1) if total_signals else 0
+
+    # Sharpe ratio (annualised, assume 252 trading days)
+    rets = np.diff(equity)
+    sharpe = 0.0
+    if len(rets) > 1 and np.std(rets) > 0:
+        sharpe = round(float(np.mean(rets) / np.std(rets) * np.sqrt(252)), 2)
+
+    # Max drawdown
+    eq_arr  = np.array(equity)
+    peak    = np.maximum.accumulate(eq_arr)
+    dd      = (eq_arr - peak) / peak
+    max_dd  = round(float(dd.min()) * 100, 2)
+
+    # Buy-and-hold benchmark — cast everything to plain Python float/int
+    bh_return    = round(float((prices[-1] - prices[26]) / prices[26] * 100), 2)
+    total_return = round(float((capital - 1) * 100), 2)
+    avg_win      = round(float(np.mean([t["return_pct"] for t in wins])),   2) if wins   else 0.0
+    avg_loss     = round(float(np.mean([t["return_pct"] for t in losses])), 2) if losses else 0.0
+
+    return {
+        "strategy":             strategy,
+        "total_trades":         int(len(trades)),
+        "total_signals":        int(total_signals),
+        "directional_accuracy": float(dir_accuracy),
+        "win_rate":             round(float(win_rate), 1),
+        "total_return":         total_return,
+        "bh_return":            bh_return,
+        "sharpe":               float(sharpe),
+        "max_drawdown":         float(max_dd),
+        "avg_win":              avg_win,
+        "avg_loss":             avg_loss,
+        "trades":               trades[-20:],
+        "equity_curve":         [round(float(e), 4) for e in equity[-90:]],
+        "equity_dates":         dates[-90:]
+    }
+
+
+@app.route("/backtest", methods=["POST"])
+def backtest():
+    try:
+        body     = request.get_json()
+        stock    = body.get("stock", "").upper().strip()
+        strategy = body.get("strategy", "combined")
+        period   = body.get("period", "1y")
+
+        if not stock:
+            return jsonify({"error": "No symbol provided"})
+
+        df = yf.download(stock, period=period, progress=False, auto_adjust=True)
+        if df.empty:
+            return jsonify({"error": f"Invalid symbol: {stock}"})
+
+        close  = df["Close"].squeeze().dropna()
+        prices = close.tolist()
+        dates  = df.index.strftime("%b %d '%y").tolist()
+
+        if len(prices) < 60:
+            return jsonify({"error": "Not enough data — try a longer period"})
+
+        result = backtest_strategy(prices, dates, strategy)
+        if not result:
+            return jsonify({"error": "No trades generated — try a different strategy or period"})
+
+        result["stock"]  = stock
+        result["period"] = period
+        return jsonify(result)
+
     except Exception as e:
         return jsonify({"error": str(e)})
 

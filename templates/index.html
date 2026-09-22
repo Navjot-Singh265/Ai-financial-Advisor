@@ -168,6 +168,31 @@ table.htable tr:hover td{background:rgba(255,255,255,0.02);}
 .quickqs{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px;border-top:1px solid var(--border);}
 .qq{background:var(--bg4);border:1px solid var(--border);border-radius:3px;font-family:var(--mono);font-size:10px;color:var(--text2);padding:4px 10px;cursor:pointer;transition:all 0.15s;}
 .qq:hover{border-color:var(--accent2);color:var(--accent);}
+/* backtest */
+.btgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;}
+.btcard{background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:12px 14px;text-align:center;}
+.btlabel{font-family:var(--mono);font-size:9px;color:var(--text3);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;}
+.btval{font-family:var(--mono);font-size:20px;font-weight:500;}
+.btsub{font-size:10px;color:var(--text2);margin-top:3px;}
+.tradetable{width:100%;border-collapse:collapse;}
+.tradetable th{font-family:var(--mono);font-size:9px;color:var(--text3);letter-spacing:1.5px;text-transform:uppercase;padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);}
+.tradetable td{font-family:var(--mono);font-size:11px;padding:7px 10px;border-bottom:1px solid var(--border);}
+.tradetable tr:last-child td{border-bottom:none;}
+.tradetable tr:hover td{background:rgba(255,255,255,0.02);}
+.btstrat{display:flex;gap:8px;flex-wrap:wrap;}
+.stratbtn{background:var(--bg4);border:1px solid var(--border2);border-radius:3px;color:var(--text2);font-family:var(--mono);font-size:10px;padding:5px 12px;cursor:pointer;letter-spacing:1px;transition:all 0.15s;}
+.stratbtn.active{background:var(--accent2);color:#fff;border-color:var(--accent);}
+.stratbtn:hover{border-color:var(--accent2);color:var(--text);}
+.cv-box{background:rgba(0,212,255,0.06);border:1px solid rgba(0,212,255,0.2);border-radius:6px;padding:16px 20px;}
+.cv-title{font-family:var(--mono);font-size:9px;color:var(--accent);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;}
+.cv-bullet{font-size:13px;color:var(--text);line-height:1.8;padding:4px 0;}
+.cv-bullet::before{content:"•  ";color:var(--accent);}
+.ac-item{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer;transition:background 0.1s;border-bottom:1px solid var(--border);}
+.ac-item:last-child{border-bottom:none;}
+.ac-item:hover{background:var(--bg4);}
+.ac-sym{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--accent);}
+.ac-name{font-size:11px;color:var(--text3);margin-top:1px;}
+.ac-type{font-family:var(--mono);font-size:9px;color:var(--text3);background:var(--bg4);padding:2px 6px;border-radius:2px;border:1px solid var(--border);}
 /* loading */
 .loader{display:none;position:fixed;inset:0;background:rgba(10,12,15,0.88);z-index:100;align-items:center;justify-content:center;flex-direction:column;gap:14px;}
 .loader.on{display:flex;}
@@ -193,6 +218,7 @@ table.htable tr:hover td{background:rgba(255,255,255,0.02);}
     <div class="tab active" data-tab="analysis">Analysis</div>
     <div class="tab" data-tab="fundamentals">Earnings &amp; Fundamentals</div>
     <div class="tab" data-tab="news">News Sentiment</div>
+    <div class="tab" data-tab="backtest">Backtest</div>
     <div class="tab" data-tab="portfolio">Portfolio</div>
     <div class="tab" data-tab="chat">AI Chat</div>
   </div>
@@ -206,7 +232,10 @@ table.htable tr:hover td{background:rgba(255,255,255,0.02);}
   <div class="sidebar">
     <div>
       <div class="slabel">Symbol Lookup</div>
-      <input class="sinput" id="stockInput" placeholder="e.g. AAPL, TSLA" maxlength="10">
+      <div style="position:relative;">
+        <input class="sinput" id="stockInput" placeholder="Search symbol or company..." maxlength="20" autocomplete="off">
+        <div id="acDropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg3);border:1px solid var(--border2);border-top:none;border-radius:0 0 4px 4px;z-index:999;max-height:220px;overflow-y:auto;"></div>
+      </div>
       <button class="abtn" id="analyzeBtn">&#9654; Analyze</button>
     </div>
     <div>
@@ -221,10 +250,6 @@ table.htable tr:hover td{background:rgba(255,255,255,0.02);}
       </div>
     </div>
     <div style="margin-top:auto;">
-      <div id="aiModeBanner" style="font-family:var(--mono);font-size:9px;padding:8px 10px;border-radius:4px;margin-bottom:8px;background:rgba(255,171,0,0.08);border:1px solid rgba(255,171,0,0.2);color:var(--amber);line-height:1.6;">
-        MODE: <strong>RULE-BASED</strong><br>
-        <a href="https://console.groq.com" target="_blank" style="color:var(--accent);text-decoration:none;">Get free Groq key &#8599;</a> for AI analysis
-      </div>
       <div style="font-size:10px;color:var(--text3);line-height:1.7;">Data: Yahoo Finance &middot; Not financial advice</div>
     </div>
   </div>
@@ -245,6 +270,26 @@ table.htable tr:hover td{background:rgba(255,255,255,0.02);}
   <div class="panel" id="panel-news">
     <div class="empty" id="news-empty"><div class="emptyicon">&#10145;</div><div class="emptytxt">Analyze a stock first</div></div>
     <div id="news-content" style="display:none;flex-direction:column;gap:12px;"></div>
+  </div>
+
+  <!-- BACKTEST PANEL -->
+  <div class="panel" id="panel-backtest">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div class="slabel" style="margin-bottom:0;">Strategy Backtester</div>
+      <select class="pinput" id="btStrategy" style="width:160px;">
+        <option value="combined">Combined (RSI + MACD)</option>
+        <option value="rsi">RSI Only</option>
+        <option value="macd">MACD Only</option>
+      </select>
+      <select class="pinput" id="btPeriod" style="width:100px;">
+        <option value="1y">1 Year</option>
+        <option value="2y">2 Years</option>
+        <option value="5y">5 Years</option>
+      </select>
+      <button class="pbtn primary" id="runBacktestBtn">&#9654; Run Backtest</button>
+    </div>
+    <div class="empty" id="bt-empty"><div class="emptyicon">&#9654;</div><div class="emptytxt">Select a strategy and run backtest</div></div>
+    <div id="bt-content" style="display:none;flex-direction:column;gap:14px;"></div>
   </div>
 
   <!-- PORTFOLIO PANEL -->
@@ -464,6 +509,89 @@ table.htable tr:hover td{background:rgba(255,255,255,0.02);}
       stopLoader();
       showError('Connection error — is Flask running?');
     });
+  }
+
+
+  // ── AUTOCOMPLETE ──
+  var acTimer = null;
+  var acActive = -1;
+
+  function initAutocomplete() {
+    var inp = document.getElementById('stockInput');
+    var drop = document.getElementById('acDropdown');
+    if (!inp || !drop) return;
+
+    inp.addEventListener('input', function() {
+      var q = inp.value.trim();
+      clearTimeout(acTimer);
+      acActive = -1;
+      if (q.length < 1) { drop.style.display = 'none'; return; }
+      acTimer = setTimeout(function() { fetchSuggestions(q); }, 180);
+    });
+
+    inp.addEventListener('keydown', function(e) {
+      var items = drop.querySelectorAll('.ac-item');
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        acActive = Math.min(acActive + 1, items.length - 1);
+        items.forEach(function(el, i) { el.style.background = i === acActive ? 'var(--bg4)' : ''; });
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        acActive = Math.max(acActive - 1, -1);
+        items.forEach(function(el, i) { el.style.background = i === acActive ? 'var(--bg4)' : ''; });
+      } else if (e.key === 'Enter') {
+        if (acActive >= 0 && items[acActive]) {
+          var sym = items[acActive].getAttribute('data-sym');
+          selectSuggestion(sym);
+          e.stopPropagation();
+        } else {
+          drop.style.display = 'none';
+        }
+      } else if (e.key === 'Escape') {
+        drop.style.display = 'none';
+        acActive = -1;
+      }
+    });
+
+    document.addEventListener('click', function(e) {
+      if (!inp.contains(e.target) && !drop.contains(e.target)) {
+        drop.style.display = 'none';
+      }
+    });
+  }
+
+  function fetchSuggestions(q) {
+    var drop = document.getElementById('acDropdown');
+    fetch('/search?q=' + encodeURIComponent(q))
+      .then(function(r) { return r.json(); })
+      .then(function(results) {
+        if (!results.length) { drop.style.display = 'none'; return; }
+        drop.innerHTML = results.map(function(r) {
+          return '<div class="ac-item" data-sym="' + r.symbol + '">'
+            + '<div><div class="ac-sym">' + r.symbol + '</div>'
+            + '<div class="ac-name">' + (r.name || '') + '</div></div>'
+            + '<span class="ac-type">' + r.type + '</span>'
+            + '</div>';
+        }).join('');
+        drop.querySelectorAll('.ac-item').forEach(function(el) {
+          el.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            selectSuggestion(el.getAttribute('data-sym'));
+          });
+        });
+        drop.style.display = 'block';
+        acActive = -1;
+      })
+      .catch(function() { drop.style.display = 'none'; });
+  }
+
+  function selectSuggestion(sym) {
+    var inp  = document.getElementById('stockInput');
+    var drop = document.getElementById('acDropdown');
+    inp.value = sym;
+    drop.style.display = 'none';
+    acActive = -1;
+    runAnalyze();
   }
 
   function initAnalyzeBtn() {
@@ -918,8 +1046,162 @@ table.htable tr:hover td{background:rgba(255,255,255,0.02);}
   document.addEventListener('DOMContentLoaded', function() {
     initTabs();
     initWatchlist();
+    initAutocomplete();
     initAnalyzeBtn();
     initPortfolio();
+
+  // ── BACKTEST ──
+  var btChart = null;
+
+  function initBacktest() {
+    var btn = document.getElementById('runBacktestBtn');
+    if (btn) btn.addEventListener('click', runBacktest);
+  }
+
+  function runBacktest() {
+    var stock = (document.getElementById('stockInput').value || '').trim().toUpperCase();
+    if (!stock) { showError('Analyze a stock first or enter a symbol'); return; }
+    var strategy = document.getElementById('btStrategy').value;
+    var period   = document.getElementById('btPeriod').value;
+    var btn = document.getElementById('runBacktestBtn');
+    btn.disabled = true;
+    btn.textContent = 'Running...';
+    fetch('/backtest', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({stock: stock, strategy: strategy, period: period})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      btn.disabled = false;
+      btn.innerHTML = '&#9654; Run Backtest';
+      if (data.error) { showError(data.error); return; }
+      renderBacktest(data);
+    })
+    .catch(function() {
+      btn.disabled = false;
+      btn.innerHTML = '&#9654; Run Backtest';
+      showError('Backtest failed — is Flask running?');
+    });
+  }
+
+  function renderBacktest(d) {
+    document.getElementById('bt-empty').style.display = 'none';
+    var wrap = document.getElementById('bt-content');
+    wrap.style.display = 'flex';
+
+    var stratLabel = d.strategy === 'combined' ? 'RSI + MACD Combined' : (d.strategy === 'rsi' ? 'RSI Only' : 'MACD Only');
+    var periodLabel = d.period === '1y' ? '1 Year' : (d.period === '2y' ? '2 Years' : '5 Years');
+    var strat_vs_bh = d.total_return - d.bh_return;
+    var outperform = strat_vs_bh >= 0;
+
+    var daColor   = d.directional_accuracy >= 60 ? 'var(--green)' : (d.directional_accuracy >= 50 ? 'var(--amber)' : 'var(--red)');
+    var wrColor   = d.win_rate >= 55 ? 'var(--green)' : (d.win_rate >= 45 ? 'var(--amber)' : 'var(--red)');
+    var retColor  = d.total_return >= 0 ? 'var(--green)' : 'var(--red)';
+    var shColor   = d.sharpe >= 1 ? 'var(--green)' : (d.sharpe >= 0 ? 'var(--amber)' : 'var(--red)');
+    var ddColor   = d.max_drawdown > -15 ? 'var(--green)' : (d.max_drawdown > -30 ? 'var(--amber)' : 'var(--red)');
+
+    // CV bullet text — the key output!
+    var cvBullet1 = 'Backtested ' + stratLabel + ' strategy on ' + d.stock + ' over ' + periodLabel
+      + ', achieving ' + d.directional_accuracy + '% directional accuracy across '
+      + d.total_signals + ' signals with a ' + d.win_rate + '% win rate.';
+    var cvBullet2 = 'Strategy generated ' + (d.total_return >= 0 ? '+' : '') + d.total_return + '% return vs '
+      + (d.bh_return >= 0 ? '+' : '') + d.bh_return + '% buy-and-hold benchmark'
+      + (outperform ? ', outperforming by +' + Math.abs(strat_vs_bh).toFixed(1) + '%' : '')
+      + '; Sharpe ratio ' + d.sharpe + ', max drawdown ' + d.max_drawdown + '%.';
+
+    var tradesHtml = (d.trades || []).slice(-10).reverse().map(function(t) {
+      return '<tr>'
+        + '<td>' + t.entry_date + '</td>'
+        + '<td>' + t.exit_date + '</td>'
+        + '<td>$' + t.entry_price + '</td>'
+        + '<td>$' + t.exit_price + '</td>'
+        + '<td class="' + (t.win ? 'up' : 'dn') + '">' + (t.return_pct >= 0 ? '+' : '') + t.return_pct + '%</td>'
+        + '<td>' + (t.win ? '<span style="color:var(--green)">WIN</span>' : '<span style="color:var(--red)">LOSS</span>') + '</td>'
+        + '</tr>';
+    }).join('');
+
+    var html = '<div style="display:flex;align-items:center;justify-content:space-between;">'
+      + '<div><div style="font-family:var(--mono);font-size:18px;font-weight:600;color:var(--accent);">' + d.stock + '</div>'
+      + '<div style="font-size:11px;color:var(--text3);font-family:var(--mono);">' + stratLabel + ' &middot; ' + periodLabel + ' &middot; ' + d.total_trades + ' trades</div></div>'
+      + '<div style="text-align:right;">'
+      + '<div style="font-family:var(--mono);font-size:11px;color:var(--text3);">vs Buy &amp; Hold</div>'
+      + '<div style="font-family:var(--mono);font-size:16px;color:' + (outperform ? 'var(--green)' : 'var(--red)') + ';">'
+      + (outperform ? '&#9650; Outperforms' : '&#9660; Underperforms') + ' by ' + Math.abs(strat_vs_bh).toFixed(1) + '%</div>'
+      + '</div></div>';
+
+    html += '<div class="btgrid">'
+      + '<div class="btcard"><div class="btlabel">Directional Accuracy</div><div class="btval" style="color:' + daColor + ';">' + d.directional_accuracy + '%</div><div class="btsub">of ' + d.total_signals + ' signals</div></div>'
+      + '<div class="btcard"><div class="btlabel">Win Rate</div><div class="btval" style="color:' + wrColor + ';">' + d.win_rate + '%</div><div class="btsub">' + d.total_trades + ' trades</div></div>'
+      + '<div class="btcard"><div class="btlabel">Total Return</div><div class="btval" style="color:' + retColor + ';">' + (d.total_return >= 0 ? '+' : '') + d.total_return + '%</div><div class="btsub">B&H: ' + (d.bh_return >= 0 ? '+' : '') + d.bh_return + '%</div></div>'
+      + '<div class="btcard"><div class="btlabel">Sharpe Ratio</div><div class="btval" style="color:' + shColor + ';">' + d.sharpe + '</div><div class="btsub">annualised</div></div>'
+      + '<div class="btcard"><div class="btlabel">Max Drawdown</div><div class="btval" style="color:' + ddColor + ';">' + d.max_drawdown + '%</div><div class="btsub">Avg win: +' + d.avg_win + '%</div></div>'
+      + '</div>';
+
+    // Equity curve chart
+    html += '<div class="ccard"><div class="ctitle">Equity Curve vs Buy &amp; Hold</div>'
+      + '<div style="position:relative;height:180px;"><canvas id="btChartCanvas"></canvas></div></div>';
+
+    // Trade log
+    html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;overflow:hidden;">'
+      + '<div class="ctitle" style="padding:12px 14px;margin-bottom:0;">Recent Trades (last 10)</div>'
+      + '<table class="tradetable"><thead><tr>'
+      + '<th>Entry Date</th><th>Exit Date</th><th>Entry Price</th><th>Exit Price</th><th>Return</th><th>Result</th>'
+      + '</tr></thead><tbody>' + tradesHtml + '</tbody></table></div>';
+
+    // CV bullet box — the money section
+    var cvFull = cvBullet1 + '\n' + cvBullet2;
+    html += '<div class="cv-box">'
+      + '<div class="cv-title">&#128196; Copy to your CV / Resume</div>'
+      + '<div class="cv-bullet">' + cvBullet1 + '</div>'
+      + '<div class="cv-bullet">' + cvBullet2 + '</div>'
+      + '<div style="margin-top:10px;">'
+      + '<button class="pbtn primary" id="copyCvBtn">&#128203; Copy Both Bullets</button>'
+      + '</div></div>';
+
+    wrap.innerHTML = html;
+    var copyCvBtn = document.getElementById('copyCvBtn');
+    if (copyCvBtn) {
+      copyCvBtn.addEventListener('click', function() {
+        navigator.clipboard.writeText(cvFull).then(function() {
+          copyCvBtn.textContent = 'Copied!';
+          setTimeout(function() { copyCvBtn.textContent = 'Copy Both Bullets'; }, 2000);
+        });
+      });
+    }
+
+    // Draw equity chart
+    if (btChart) { btChart.destroy(); btChart = null; }
+    var ctx = document.getElementById('btChartCanvas');
+    if (ctx && d.equity_curve && d.equity_curve.length) {
+      var bhCurve = d.equity_curve.map(function(_, i) {
+        return Math.round((1 + (i / d.equity_curve.length) * (d.bh_return / 100)) * 10000) / 10000;
+      });
+      btChart = new Chart(ctx.getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: d.equity_dates || d.equity_curve.map(function(_, i) { return i; }),
+          datasets: [
+            {label: 'Strategy', data: d.equity_curve, borderColor: '#00d4ff', borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.3},
+            {label: 'Buy & Hold', data: bhCurve, borderColor: 'rgba(255,171,0,0.6)', borderWidth: 1, pointRadius: 0, fill: false, tension: 0.3, borderDash: [4, 3]}
+          ]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {legend: {display: true, labels: {color: '#8a9ab5', font: {family: 'IBM Plex Mono', size: 10}}},
+            tooltip: {backgroundColor: '#141920', borderColor: '#1a2130', borderWidth: 1, titleColor: '#8a9ab5', bodyColor: '#e8edf3',
+              titleFont: {family: 'IBM Plex Mono', size: 10}, bodyFont: {family: 'IBM Plex Mono', size: 11},
+              callbacks: {label: function(c) { return c.dataset.label + ': ' + (c.parsed.y * 100 - 100).toFixed(2) + '%'; }}}},
+          scales: {
+            x: {ticks: {color: '#4a5a72', font: {family: 'IBM Plex Mono', size: 9}, maxTicksLimit: 8}, grid: {color: 'rgba(255,255,255,0.03)'}, border: {color: 'rgba(255,255,255,0.06)'}},
+            y: {ticks: {color: '#4a5a72', font: {family: 'IBM Plex Mono', size: 9}, callback: function(v) { return ((v - 1) * 100).toFixed(0) + '%'; }}, grid: {color: 'rgba(255,255,255,0.03)'}, border: {color: 'rgba(255,255,255,0.06)'}}
+          }
+        }
+      });
+    }
+  }
+
+    initBacktest();
     initChat();
   });
 
