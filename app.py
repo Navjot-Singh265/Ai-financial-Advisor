@@ -32,7 +32,9 @@ def groq_chat(system_prompt, user_prompt, max_tokens=1024):
         data=payload,
         headers={
             "Content-Type": "application/json",
-            "Authorization": "Bearer " + GROQ_API_KEY
+            "Authorization": "Bearer " + GROQ_API_KEY,
+            "User-Agent": "QuantView/1.0"
+            
         },
         method="POST"
     )
