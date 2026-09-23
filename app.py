@@ -40,6 +40,10 @@ def groq_chat(system_prompt, user_prompt, max_tokens=1024):
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return data["choices"][0]["message"]["content"].strip()
+    except urllib.error.HTTPError as e:
+        print("Groq error:", e)
+        print("Groq response:", e.read().decode("utf-8", errors="replace"))
+        return None
     except Exception as e:
         print("Groq error:", e)
         return None
