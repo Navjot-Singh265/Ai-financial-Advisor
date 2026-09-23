@@ -405,6 +405,19 @@ def get_fundamentals(ticker_obj):
 # ROUTES
 # ─────────────────────────────────────────────
 
+def clean_for_json(obj):
+    if isinstance(obj, float):
+        return obj if np.isfinite(obj) else None
+
+    if isinstance(obj, dict):
+        return {k: clean_for_json(v) for k, v in obj.items()}
+
+    if isinstance(obj, list):
+        return [clean_for_json(v) for v in obj]
+
+    return obj
+
+
 @app.route("/")
 def home():
     return render_template("index.html")
@@ -536,7 +549,7 @@ def analyze():
             "volumes":         [int(v) for v in volume.iloc[-90:].tolist()],
         }
 
-        return jsonify({
+        return jsonify(clean_for_json({
             "stock": stock,
             "name":  fundamentals.get("name", stock),
             "ai_powered": bool(GROQ_API_KEY),
@@ -555,7 +568,7 @@ def analyze():
             "sentiment":    sentiment,
             "ai":           ai,
             "chart":        chart
-        })
+        }))
 
     except Exception as e:
         return jsonify({"error": str(e)})
