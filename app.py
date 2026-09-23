@@ -7,8 +7,7 @@ import urllib.request
 import urllib.error
 
 app = Flask(__name__)
-
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "openai/gpt-oss-20b"
 
